@@ -80,6 +80,8 @@ public abstract class QueueTransferTask {
     private int statusListenerId;
     
     public void start() {
+        // 调用的就是RedissonDelayedQueue构造方法里面定义的getTopic()方法
+        // 注册两个Listener监听事件：1.onSubscribe(订阅监听) 2.onMessage(消息监听)
         RTopic schedulerTopic = getTopic();
         statusListenerId = schedulerTopic.addListener(new BaseStatusListener() {
             @Override
@@ -102,18 +104,25 @@ public abstract class QueueTransferTask {
         schedulerTopic.removeListener(statusListenerId);
     }
 
+    /**
+     *
+     * @param startTime pushTaskAsync 方法返回的时间
+     */
     private void scheduleTask(final Long startTime) {
         TimeoutTask oldTimeout = lastTimeout.get();
         if (startTime == null) {
             return;
         }
-        
+
+        // 取消上一个定时任务
         if (oldTimeout != null) {
             oldTimeout.getTask().cancel();
         }
-        
+
+        // 如果任务过期时间减去系统当前时间大于 10 毫秒，说明任务还没有过期
         long delay = startTime - System.currentTimeMillis();
         if (delay > 10) {
+            // 定时时间 = 剩余的过期时间
             Timeout timeout = serviceManager.newTimeout(new TimerTask() {
                 @Override
                 public void run(Timeout timeout) throws Exception {
@@ -129,6 +138,7 @@ public abstract class QueueTransferTask {
                 timeout.cancel();
             }
         } else {
+            // 如果任务过期时间减去系统当前时间小于等于 10 毫秒，则将过期数据放入目标延迟队列里面
             pushTask();
         }
     }
@@ -138,7 +148,9 @@ public abstract class QueueTransferTask {
     protected abstract RFuture<Long> pushTaskAsync();
     
     private void pushTask() {
+        // 调用的就是RedissonDelayedQueue构造方法里面定义的 pushTaskAsync 方法
         RFuture<Long> startTimeFuture = pushTaskAsync();
+        // 返回最先过期的任务的时间
         startTimeFuture.whenComplete((res, e) -> {
             if (e != null) {
                 if (e instanceof RedissonShutdownException) {
@@ -148,7 +160,8 @@ public abstract class QueueTransferTask {
                 scheduleTask(System.currentTimeMillis() + 5 * 1000L);
                 return;
             }
-            
+
+            // res 为返回值
             if (res != null) {
                 scheduleTask(res);
             }
